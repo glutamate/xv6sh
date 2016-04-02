@@ -46,7 +46,9 @@ processLn = words . takeWhile (/='#') . chomp
 goLine, cd :: [String] -> ShM ()
 
 goLine ("cd":rest) = cd rest
-goLine s = liftIO $ exec s
+goLine s = case parseCmd s of
+  Nothing -> return ()
+  Just cmd -> liftIO $ execCmd cmd
 
 cd [] = do
   home <- liftIO $ getHomeDirectory
@@ -59,22 +61,52 @@ cd (dir:_) = do
       liftIO $ putErr $ dir ++ ": "++ioe_description (e :: IOException)
       return ()
 
-exec :: [String] -> IO ()
-exec (cmd:args) = do
-  mfp <- findExecutable cmd
-  case mfp of
-    Nothing -> putErr $ cmd ++ ": command not found"
-    Just fp -> do
-      (mb_stdin_hdl, mb_stdout_hdl, mb_stderr_hdl, ph) <- createProcess (proc fp args)
+execCmd :: Cmd -> IO ()
+execCmd cmd = do
+  mb_fpcmd <- findExecutable $ cmd_call cmd
+  case mb_fpcmd of
+    Nothing -> putErr $ cmd_call cmd ++ ": command not found"
+    Just fpcmd -> do
+      stdOut <- case cmd_out cmd of
+        Nothing -> return Inherit
+        Just fp -> fmap UseHandle $ openFile fp WriteMode
+      stdIn <- case cmd_in cmd of
+        Nothing -> return Inherit
+        Just fp -> fmap UseHandle $ openFile fp ReadMode
+      let cP = (proc fpcmd (cmd_args cmd)) {std_out = stdOut, std_in = stdIn }
+      (mb_stdin_hdl, mb_stdout_hdl, mb_stderr_hdl, ph) <- createProcess cP
       _ <- waitForProcess ph
+      case stdOut of
+        UseHandle h -> hClose h
+        _ -> return ()
       return ()
 
+
 putErr  = hPutStrLn stderr
+
+data Cmd = Cmd
+  { cmd_call :: String
+  , cmd_args :: [String]
+  , cmd_in :: Maybe String
+  , cmd_out :: Maybe String
+  , cmd_pipeto :: Maybe Cmd
+  }
+
+parseCmd :: [String] -> Maybe Cmd
+parseCmd [] = Nothing
+parseCmd (cmd0:rest) = parseArgs (Cmd cmd0 [] Nothing Nothing Nothing) rest where
+  parseArgs cmd [] = Just cmd
+  parseArgs cmd ("|":rest) = do
+    to <- parseCmd rest
+    Just $ cmd {cmd_pipeto = Just to}
+  parseArgs cmd (">":fnm:rest) = parseArgs (cmd {cmd_out = Just fnm}) rest
+  parseArgs cmd ("<":fnm:rest) = parseArgs (cmd {cmd_in = Just fnm}) rest
+  parseArgs cmd (arg:rest) = parseArgs (cmd {cmd_args = cmd_args cmd ++ [arg] }) rest
+
 
 
 {- TODO
 
-redirect output, input, err
 set variables
 piping
 
