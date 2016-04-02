@@ -7,9 +7,10 @@ import Control.Monad.Trans.Class (lift)
 import System.Directory
 import System.Process
 import System.Environment
-import Control.Exception
+import Control.Exception  hiding (handle)
 import System.IO
 import GHC.IO.Exception
+import Data.List
 
 data ShSt = ShSt { interactive :: Bool }
 
@@ -30,13 +31,17 @@ chomp = reverse . chomp' . reverse . chomp' where
 
 runShell :: InputT ShM ()
 runShell = do
-  interact <- fmap interactive $ lift get
+  interact <- haveTerminalUI
   let prompt = if interact then "$ " else ""
-  mln <- getInputLine prompt
-  case fmap chomp mln of
-    Just "exit" -> return ()
+  mln <- handle (\Interrupt -> return $ Just [] ) $ withInterrupt $ getInputLine prompt
+  case fmap processLn mln of
+    Just ("exit":_) -> return ()
+    Just [] -> runShell
     Nothing -> return ()
-    Just ln -> lift (goLine (words ln)) >> runShell
+    Just ln -> lift (goLine ln) >> runShell
+
+processLn :: String -> [String]
+processLn = words . takeWhile (/='#') . chomp
 
 goLine, cd :: [String] -> ShM ()
 
@@ -69,8 +74,6 @@ putErr  = hPutStrLn stderr
 
 {- TODO
 
-run script
-comments
 redirect output, input, err
 set variables
 piping
