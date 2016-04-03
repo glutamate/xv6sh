@@ -8,6 +8,7 @@ import System.Directory
 import System.Process
 import System.Environment
 import Control.Exception  hiding (handle)
+import Control.Monad
 import System.IO
 import GHC.IO.Exception
 import Data.List
@@ -62,25 +63,41 @@ cd (dir:_) = do
       return ()
 
 execCmd :: Cmd -> IO ()
-execCmd cmd = do
-  mb_fpcmd <- findExecutable $ cmd_call cmd
-  case mb_fpcmd of
-    Nothing -> putErr $ cmd_call cmd ++ ": command not found"
-    Just fpcmd -> do
-      stdOut <- case cmd_out cmd of
-        Nothing -> return Inherit
-        Just fp -> fmap UseHandle $ openFile fp WriteMode
-      stdIn <- case cmd_in cmd of
-        Nothing -> return Inherit
-        Just fp -> fmap UseHandle $ openFile fp ReadMode
-      let cP = (proc fpcmd (cmd_args cmd)) {std_out = stdOut, std_in = stdIn }
-      (mb_stdin_hdl, mb_stdout_hdl, mb_stderr_hdl, ph) <- createProcess cP
-      _ <- waitForProcess ph
-      case stdOut of
-        UseHandle h -> hClose h
-        _ -> return ()
-      return ()
+execCmd = go Inherit [] [] where
+  go inStream procHans openStreams cmd = do
+    mb_fpcmd <- findExecutable $ cmd_call cmd
+    case mb_fpcmd of
+      Nothing -> do putErr $ cmd_call cmd ++ ": command not found"
+                    waitForProcesses procHans
+                    closeStreams openStreams
+      Just fpcmd -> do
+        stdIn <- case cmd_in cmd of
+          Nothing -> return inStream
+          Just fp -> fmap UseHandle $ openFile fp ReadMode
+        stdOut <- case cmd_out cmd of
+          Just fp -> fmap UseHandle $ openFile fp WriteMode
+          Nothing -> case cmd_pipeto cmd of
+            Nothing -> return Inherit
+            Just _ -> return CreatePipe
+        let cP = (proc fpcmd (cmd_args cmd)) {std_out = stdOut, std_in = stdIn }
+        (mb_stdin_hdl, mb_stdout_hdl, mb_stderr_hdl, ph) <- createProcess cP
+        case cmd_pipeto cmd of
+          Nothing -> do waitForProcesses (ph:procHans)
+                        closeStreams (stdIn:stdOut:openStreams)
+          Just cmdTo -> go (maybe Inherit UseHandle mb_stdout_hdl)
+                           (ph:procHans)
+                           (stdIn:stdOut:openStreams)
+                           cmdTo
 
+
+
+closeStreams :: [StdStream] -> IO ()
+closeStreams =  mapM_ closeStream . reverse where
+  closeStream (UseHandle h) = hClose h
+  closeStream _ = return ()
+
+waitForProcesses :: [ProcessHandle] -> IO ()
+waitForProcesses = mapM_ (void . waitForProcess) . reverse
 
 putErr  = hPutStrLn stderr
 
@@ -108,6 +125,5 @@ parseCmd (cmd0:rest) = parseArgs (Cmd cmd0 [] Nothing Nothing Nothing) rest wher
 {- TODO
 
 set variables
-piping
 
 -}
