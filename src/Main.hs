@@ -25,11 +25,6 @@ main = do
         (fnm:_) -> (useFile fnm, ShSt False)
   flip evalStateT st $ runInputTBehavior beh defaultSettings runShell
 
-chomp :: String -> String
-chomp = reverse . chomp' . reverse . chomp' where
-  chomp' (' ':s) = chomp' s
-  chomp' s = s
-
 runShell :: InputT ShM ()
 runShell = do
   interact <- haveTerminalUI
@@ -42,7 +37,7 @@ runShell = do
     Just ln -> lift (goLine ln) >> runShell
 
 processLn :: String -> [String]
-processLn = words . takeWhile (/='#') . chomp
+processLn = words . takeWhile (/='#')
 
 goLine, cd :: [String] -> ShM ()
 
@@ -119,11 +114,3 @@ parseCmd (cmd0:rest) = parseArgs (Cmd cmd0 [] Nothing Nothing Nothing) rest wher
   parseArgs cmd (">":fnm:rest) = parseArgs (cmd {cmd_out = Just fnm}) rest
   parseArgs cmd ("<":fnm:rest) = parseArgs (cmd {cmd_in = Just fnm}) rest
   parseArgs cmd (arg:rest) = parseArgs (cmd {cmd_args = cmd_args cmd ++ [arg] }) rest
-
-
-
-{- TODO
-
-set variables
-
--}
